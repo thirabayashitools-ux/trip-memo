@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#2B3A55">
 <title>出張メモ</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
 :root{
   --bg:#E9EEEA; --paper:#FFFFFF; --ink:#22304A; --sub:#5E6B7E;
@@ -28,6 +29,7 @@ h2{font-size:15px;margin:22px 0 8px;color:var(--sub);font-weight:600}
 .kinds button{padding:14px 4px;border:2px solid var(--rule);background:var(--paper);color:var(--ink);
   border-radius:var(--r-lg);font-size:16px;font-weight:700}
 .kinds button[aria-pressed=true]{border-color:var(--brand);background:var(--brand);color:var(--paper)}
+.kinds.trip{grid-template-columns:1fr 1fr;margin-top:12px}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 label{display:block;font-size:13px;color:var(--sub);margin:10px 0 4px}
 input,select,textarea{width:100%;font:inherit;color:var(--ink);background:var(--field);
@@ -54,6 +56,7 @@ input:focus,select:focus,button:focus-visible{outline:3px solid var(--brand);out
 .item .a{font-variant-numeric:tabular-nums;font-weight:700;text-align:right}
 .item button{grid-column:2;justify-self:end}
 .total{display:flex;justify-content:space-between;font-weight:700;padding:12px 0;font-variant-numeric:tabular-nums}
+.tag{display:inline-block;font-size:12px;padding:0 6px;border-radius:4px;border:1px solid var(--warn);color:var(--warn);margin-left:6px}
 .empty{color:var(--sub);padding:24px 0;text-align:center}
 nav{position:fixed;left:0;right:0;bottom:0;display:grid;grid-template-columns:repeat(3,1fr);
   background:var(--paper);border-top:1px solid var(--rule);padding-bottom:env(safe-area-inset-bottom)}
@@ -101,6 +104,12 @@ nav button[aria-current=page]{color:var(--brand);font-weight:700;box-shadow:inse
     <input id="s-keyfile" type="file" hidden>
     <label for="s-model">モデル</label>
     <input id="s-model">
+    <label for="s-inputter">入力者（スプレッドシートでの識別用。人名以外の記号で）</label>
+    <input id="s-inputter" placeholder="例：A">
+    <label for="s-sheet">スプレッドシートのURL</label>
+    <input id="s-sheet" placeholder="https://docs.google.com/spreadsheets/d/…">
+    <label for="s-client">GoogleログインのクライアントID</label>
+    <input id="s-client">
     <label for="s-user">利用者の初期値</label>
     <input id="s-user" placeholder="例：自分">
     <label for="s-fare">交通費に使う運賃</label>
@@ -123,7 +132,9 @@ nav button[aria-current=page]{color:var(--brand);font-weight:700;box-shadow:inse
 // 保存領域（このスマホのブラウザ内）
 // ============================================================
 const KEY_SET = 'tm.settings', KEY_ITEMS = 'tm.items';
-const DEFAULTS = { key:'', model:'gemini-3.5-flash', user:'自分', fare:'ic', round:'double' };
+const DEFAULTS = { key:'', model:'gemini-3.5-flash', user:'自分', fare:'ic', round:'double', inputter:'A',
+  sheet:'14G7x4DYTg5xmR_n-Rt6u_sT7XKpxusCmOuDz2rhhtes',
+  client:'151097085526-rgsi13mlttqtm0ettenhnv50sg89fdc9.apps.googleusercontent.com' };
 
 function load(k, d){ try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }catch(e){ return d; } }
 function store(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); return true; }catch(e){ return false; } }
@@ -167,6 +178,7 @@ $('#f-user').value = settings.user;
 function fillSettings(){
   $('#s-key').value = settings.key; $('#s-model').value = settings.model;
   $('#s-user').value = settings.user; $('#s-fare').value = settings.fare; $('#s-round').value = settings.round;
+  $('#s-inputter').value = settings.inputter; $('#s-sheet').value = settings.sheet; $('#s-client').value = settings.client;
 }
 // キーファイル（中身がキーそのもの、または GEMINI_API_KEY=xxx の形式）を読み込む
 $('#b-keyfile').onclick = () => $('#s-keyfile').click();
@@ -182,7 +194,9 @@ $('#s-keyfile').onchange = async e => {
 };
 $('#b-save-set').onclick = () => {
   settings = { key:$('#s-key').value.trim(), model:$('#s-model').value.trim() || DEFAULTS.model,
-    user:$('#s-user').value.trim(), fare:$('#s-fare').value, round:$('#s-round').value };
+    user:$('#s-user').value.trim(), fare:$('#s-fare').value, round:$('#s-round').value,
+    inputter:$('#s-inputter').value.trim() || DEFAULTS.inputter,
+    sheet:sheetId($('#s-sheet').value) || DEFAULTS.sheet, client:$('#s-client').value.trim() || DEFAULTS.client };
   $('#set-status').textContent = store(KEY_SET, settings) ? '保存しました。' : '保存できませんでした。ブラウザの保存領域を確認してください。';
   $('#f-user').value = settings.user;
 };
@@ -411,10 +425,7 @@ function slipHtml(p, i){
       <div><label>降車駅</label><input data-f="c2" value="${esc(p.c2)}"></div></div>`
     : `<label>内容</label><input data-f="c1" value="${esc(p.c1)}">`}
     <div class="row2">
-      ${isRail ? `<div><label>区分</label><select data-f="kubun">
-        <option ${p.kubun === '片道' ? 'selected' : ''}>片道</option>
-        <option ${p.kubun === '往復' ? 'selected' : ''}>往復</option></select></div>`
-      : `<div><label>備考</label><input data-f="note" value="${esc(p.note)}"></div>`}
+      ${isRail ? '' : `<div><label>備考</label><input data-f="note" value="${esc(p.note)}"></div>`}
       <div><label>金額（円）</label><input class="yen" inputmode="numeric" data-f="amount" value="${esc(p.amount)}"></div>
     </div>
   </div>`;
@@ -425,6 +436,8 @@ function renderPending(){
   const total = pending.reduce((a, p) => a + (num(p.amount) || 0), 0);
   $('#result').innerHTML =
     (check ? `<div class="note ${check.type}">${esc(check.text)}</div>` : '') +
+    (pending[0].kind === 'rail' ? `<div class="kinds trip" role="group" aria-label="片道か往復か">
+      ${['片道','往復'].map(k => `<button data-kb="${k}" aria-pressed="${pending[0].kubun === k}">${k}</button>`).join('')}</div>` : '') +
     pending.map(slipHtml).join('') +
     `<div class="total"><span>合計</span><span>${yen(total)}円</span></div>
      <div class="tools"><button class="ghost" id="b-add">行を追加</button></div>
@@ -435,6 +448,15 @@ function renderPending(){
     renderPending();
   };
   $('#b-save').onclick = savePending;
+  // 片道／往復は読み取り単位で全行に適用
+  $('#result').querySelectorAll('[data-kb]').forEach(b => b.onclick = () => {
+    pending.forEach(p => {
+      p.kubun = b.dataset.kb;
+      if (p.base !== null && p.base !== undefined)
+        p.amount = p.kubun === '往復' && settings.round === 'double' ? p.base * 2 : p.base;
+    });
+    renderPending();
+  });
 }
 
 $('#result').addEventListener('input', e => {
@@ -442,10 +464,6 @@ $('#result').addEventListener('input', e => {
   const p = pending[slip.dataset.i], f = e.target.dataset.f;
   p[f] = e.target.value;
   if (f === 'amount') { p.base = null; updateTotal(); }
-  if (f === 'kubun' && p.base !== null && p.base !== undefined) {
-    p.amount = p.kubun === '往復' && settings.round === 'double' ? p.base * 2 : p.base;
-    slip.querySelector('[data-f=amount]').value = p.amount; updateTotal();
-  }
 });
 $('#result').addEventListener('change', e => { if (e.target.tagName === 'SELECT') e.target.dispatchEvent(new Event('input', { bubbles:true })); });
 $('#result').addEventListener('click', e => {
@@ -476,19 +494,23 @@ function renderList(){
   if (!items.length) { $('#list').innerHTML = '<p class="empty">まだ何もありません。「読み取り」から追加してください。</p>'; return; }
   const sorted = items.slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   const total = sorted.reduce((a, p) => a + (p.amount || 0), 0);
+  const unsent = items.filter(p => !p.sent).length;
   $('#list').innerHTML = sorted.map(p => `<div class="item">
       <div>${esc(p.payee)}　${esc(p.kind === 'rail' ? p.c1 + ' → ' + p.c2 : p.c1)}
-        <div class="m">${esc(p.date)}　${esc(p.user)}${p.kubun ? '　' + esc(p.kubun) : ''}${p.note ? '　' + esc(p.note) : ''}</div></div>
+        <div class="m">${esc(p.date)}　${esc(p.user)}${p.kubun ? '　' + esc(p.kubun) : ''}${p.note ? '　' + esc(p.note) : ''}${p.sent ? '' : '<span class="tag">未送信</span>'}</div></div>
       <div class="a">${yen(p.amount)}円</div>
       <button class="ghost" data-id="${esc(p.id)}">削除</button>
     </div>`).join('') +
     `<div class="total"><span>合計 ${sorted.length}件</span><span>${yen(total)}円</span></div>
+     <button class="primary" id="b-send" ${unsent ? '' : 'disabled'}>${unsent ? '未送信の' + unsent + '件をスプレッドシートに送る' : 'すべて送信済みです'}</button>
      <div class="tools"><button class="ghost" id="b-copy">表形式でコピー</button></div>
      <div class="status" id="list-status" role="status"></div>`;
   $('#list').querySelectorAll('[data-id]').forEach(b => b.onclick = () => {
-    if (!confirm('この明細を削除しますか？')) return;
+    const it = items.find(p => p.id === b.dataset.id);
+    if (!confirm(it && it.sent ? 'このスマホから削除します。スプレッドシート側の行は残るので、必要ならそちらも消してください。' : 'この明細を削除しますか？')) return;
     items = items.filter(p => p.id !== b.dataset.id); store(KEY_ITEMS, items); renderList();
   });
+  $('#b-send').onclick = () => withToken(sendItems);
   $('#b-copy').onclick = async () => {
     const rows = [['日付','利用者','支払先','内容1','内容2','区分','金額','備考']]
       .concat(sorted.map(p => [p.date, p.user, p.payee, p.c1, p.c2, p.kubun, p.amount, p.note]));
@@ -496,6 +518,67 @@ function renderList(){
       $('#list-status').textContent = 'コピーしました。スプレッドシートに貼り付けできます。'; }
     catch(e) { $('#list-status').textContent = 'コピーできませんでした。'; }
   };
+}
+
+// ============================================================
+// スプレッドシート連携
+// ============================================================
+const SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
+const SHEET = '明細';
+const HEADERS = ['明細ID','出張ID','入力者','日付','利用者','種別','支払先','内容1','内容2','区分','金額','備考','出力済','登録日時'];
+const KIND_LABEL = { rail:'交通', receipt:'レシート', delivery:'宅配' };
+let token = load('tm.token', null);
+
+function sheetId(v){ const m = String(v || '').match(/\/d\/([\w-]+)/); return m ? m[1] : String(v || '').trim(); }
+function listStatus(t){ const s = $('#list-status'); if (s) s.textContent = t; }
+
+function withToken(fn){
+  if (token && token.exp > Date.now() + 60000) return fn(token.v);
+  if (!window.google || !google.accounts || !google.accounts.oauth2) { listStatus('Googleログインの準備中です。数秒待ってからもう一度押してください。'); return; }
+  const client = google.accounts.oauth2.initTokenClient({
+    client_id:settings.client, scope:SCOPE,
+    callback:r => {
+      if (r.error) { listStatus('ログインできませんでした（' + r.error + '）。'); return; }
+      token = { v:r.access_token, exp:Date.now() + r.expires_in * 1000 };
+      store('tm.token', token); fn(token.v);
+    },
+    error_callback:() => listStatus('ログインが中断されました。もう一度押してください。')
+  });
+  client.requestAccessToken();
+}
+
+async function sheets(path, tok, method = 'GET', body){
+  const res = await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + settings.sheet + path, {
+    method, headers:{ Authorization:'Bearer ' + tok, 'Content-Type':'application/json' }, body:body ? JSON.stringify(body) : undefined });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401) { token = null; store('tm.token', null); throw new Error('ログインの期限が切れました。もう一度押してください。'); }
+  if (!res.ok) throw new Error('スプレッドシートのエラー（' + res.status + '）：' + (data.error?.message || '応答なし'));
+  return data;
+}
+
+async function ensureSheet(tok){
+  const meta = await sheets('?fields=sheets.properties.title', tok);
+  if (!(meta.sheets || []).some(x => x.properties.title === SHEET))
+    await sheets(':batchUpdate', tok, 'POST', { requests:[{ addSheet:{ properties:{ title:SHEET } } }] });
+  const head = await sheets('/values/' + encodeURIComponent(SHEET + '!A1:N1'), tok);
+  if (!head.values || !head.values.length)
+    await sheets('/values/' + encodeURIComponent(SHEET + '!A1:N1') + '?valueInputOption=RAW', tok, 'PUT', { values:[HEADERS] });
+}
+
+async function sendItems(tok){
+  const targets = items.filter(p => !p.sent);
+  if (!targets.length) return;
+  $('#b-send').disabled = true; listStatus('送信しています…');
+  try {
+    await ensureSheet(tok);
+    const rows = targets.map(p => [p.id, p.tripId || '', settings.inputter, p.date, p.user, KIND_LABEL[p.kind] || p.kind,
+      p.payee, p.c1, p.c2 || '', p.kubun || '', p.amount, p.note || '', false,
+      (p.createdAt || '').replace('T', ' ').slice(0, 16)]);
+    await sheets('/values/' + encodeURIComponent(SHEET + '!A1') + ':append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS',
+      tok, 'POST', { values:rows });
+    targets.forEach(p => p.sent = true); store(KEY_ITEMS, items);
+    renderList(); listStatus(rows.length + '件を送信しました。');
+  } catch(e) { $('#b-send').disabled = false; listStatus(e.message); }
 }
 
 if (!settings.key) setStatus('最初に「設定」でGemini APIキーを入力してください。');
