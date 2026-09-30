@@ -97,6 +97,8 @@ nav button[aria-current=page]{color:var(--brand);font-weight:700;box-shadow:inse
     <h1>設定</h1>
     <label for="s-key">Gemini APIキー</label>
     <input id="s-key" type="password" autocomplete="off" placeholder="このスマホの中だけに保存されます">
+    <div class="tools"><button class="ghost" id="b-keyfile" type="button">ファイルから読み込む</button></div>
+    <input id="s-keyfile" type="file" hidden>
     <label for="s-model">モデル</label>
     <input id="s-model">
     <label for="s-user">利用者の初期値</label>
@@ -166,6 +168,18 @@ function fillSettings(){
   $('#s-key').value = settings.key; $('#s-model').value = settings.model;
   $('#s-user').value = settings.user; $('#s-fare').value = settings.fare; $('#s-round').value = settings.round;
 }
+// キーファイル（中身がキーそのもの、または GEMINI_API_KEY=xxx の形式）を読み込む
+$('#b-keyfile').onclick = () => $('#s-keyfile').click();
+$('#s-keyfile').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  const t = await f.text();
+  const m = t.match(/GEMINI_API_KEY\s*=\s*["']?([^"'\s]+)/);
+  const k = m ? m[1] : (t.split(/\r?\n/).map(s => s.trim()).find(s => s) || '');
+  e.target.value = '';
+  if (!k) { $('#set-status').textContent = 'ファイルが空でした。'; return; }
+  $('#s-key').value = k;
+  $('#set-status').textContent = 'キーを読み込みました。「設定を保存」を押すと保存されます。';
+};
 $('#b-save-set').onclick = () => {
   settings = { key:$('#s-key').value.trim(), model:$('#s-model').value.trim() || DEFAULTS.model,
     user:$('#s-user').value.trim(), fare:$('#s-fare').value, round:$('#s-round').value };
