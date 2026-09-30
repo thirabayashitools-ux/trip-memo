@@ -57,12 +57,24 @@ input:focus,select:focus,button:focus-visible{outline:3px solid var(--brand);out
 .item button{grid-column:2;justify-self:end}
 .total{display:flex;justify-content:space-between;font-weight:700;padding:12px 0;font-variant-numeric:tabular-nums}
 .tag{display:inline-block;font-size:12px;padding:0 6px;border-radius:4px;border:1px solid var(--warn);color:var(--warn);margin-left:6px}
+.kinds.four{grid-template-columns:repeat(4,1fr)}
+.kinds.four button{font-size:14px;padding:12px 2px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.chips label{display:inline-flex;align-items:center;gap:6px;margin:0;padding:6px 12px;border:1px solid var(--rule);
+  border-radius:999px;background:var(--paper);color:var(--ink);font-size:14px}
+.chips input{width:auto;margin:0}
+.chips label:has(input:checked){border-color:var(--brand);background:color-mix(in srgb,var(--brand) 14%,var(--paper))}
+.check{display:flex;align-items:center;gap:8px;color:var(--ink);font-size:15px;margin-top:12px}
+.check input{width:auto}
+.calc p{margin:6px 0;font-size:14px}
+.calc b{font-variant-numeric:tabular-nums}
+.sub{font-size:13px;color:var(--sub)}
 .empty{color:var(--sub);padding:24px 0;text-align:center}
-nav{position:fixed;left:0;right:0;bottom:0;display:grid;grid-template-columns:repeat(3,1fr);
+nav{position:fixed;left:0;right:0;bottom:0;display:grid;grid-template-columns:repeat(4,1fr);
   background:var(--paper);border-top:1px solid var(--rule);padding-bottom:env(safe-area-inset-bottom)}
 nav button{padding:14px 0;border:0;background:none;font:inherit;font-size:15px;color:var(--sub)}
 nav button[aria-current=page]{color:var(--brand);font-weight:700;box-shadow:inset 0 3px 0 var(--brand)}
-@media (prefers-reduced-motion:no-preference){.slip{animation:in .25s ease-out}}
+@media (prefers-reduced-motion:no-preference){#result .slip{animation:in .25s ease-out}}
 @keyframes in{from{opacity:0;transform:translateY(6px)}}
 </style>
 </head>
@@ -71,6 +83,7 @@ nav button[aria-current=page]{color:var(--brand);font-weight:700;box-shadow:inse
   <!-- 読み取り -->
   <section id="v-read" class="view on">
     <h1>出張メモ</h1>
+    <p class="sub" id="trip-line"></p>
     <div class="kinds" role="group" aria-label="種類">
       <button data-k="rail" aria-pressed="true">交通</button>
       <button data-k="receipt" aria-pressed="false">レシート</button>
@@ -87,6 +100,12 @@ nav button[aria-current=page]{color:var(--brand);font-weight:700;box-shadow:inse
     <button class="primary" id="b-read" disabled>読み取る</button>
     <div class="status" id="status" role="status"></div>
     <div id="result"></div>
+  </section>
+
+  <!-- 出張 -->
+  <section id="v-trip" class="view">
+    <h1>出張</h1>
+    <div id="trip"></div>
   </section>
 
   <!-- 保存済み -->
@@ -122,6 +141,7 @@ nav button[aria-current=page]{color:var(--brand);font-weight:700;box-shadow:inse
 </main>
 
 <nav>
+  <button data-v="trip">出張</button>
   <button data-v="read" aria-current="page">読み取り</button>
   <button data-v="list">保存済み</button>
   <button data-v="set">設定</button>
@@ -160,6 +180,8 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('on'));
   $('#v-' + b.dataset.v).classList.add('on');
   if (b.dataset.v === 'list') renderList();
+  if (b.dataset.v === 'trip') renderTrip();
+  if (b.dataset.v === 'read') renderTripLine();
   if (b.dataset.v === 'set') fillSettings();
 });
 
@@ -193,7 +215,7 @@ $('#s-keyfile').onchange = async e => {
   $('#set-status').textContent = 'キーを読み込みました。「設定を保存」を押すと保存されます。';
 };
 $('#b-save-set').onclick = () => {
-  settings = { key:$('#s-key').value.trim(), model:$('#s-model').value.trim() || DEFAULTS.model,
+  settings = { trip:settings.trip, key:$('#s-key').value.trim(), model:$('#s-model').value.trim() || DEFAULTS.model,
     user:$('#s-user').value.trim(), fare:$('#s-fare').value, round:$('#s-round').value,
     inputter:$('#s-inputter').value.trim() || DEFAULTS.inputter,
     sheet:sheetId($('#s-sheet').value) || DEFAULTS.sheet, client:$('#s-client').value.trim() || DEFAULTS.client };
@@ -479,7 +501,7 @@ function savePending(){
   const bad = pending.findIndex(p => num(p.amount) === null || !String(p.payee).trim());
   if (bad >= 0) { setStatus((bad + 1) + '件目の支払先か金額が空です。入力してから保存してください。', true); return; }
   const now = new Date().toISOString();
-  pending.forEach(p => items.push(Object.assign({}, p, { amount:num(p.amount), id:crypto.randomUUID(), createdAt:now })));
+  pending.forEach(p => items.push(Object.assign({}, p, { amount:num(p.amount), id:crypto.randomUUID(), createdAt:now, tripId:settings.trip || '' })));
   if (!store(KEY_ITEMS, items)) { setStatus('保存できませんでした。ブラウザの保存領域を確認してください。', true); return; }
   setStatus(pending.length + '件を保存しました。');
   pending = []; check = null; imageData = null;
@@ -530,7 +552,7 @@ const KIND_LABEL = { rail:'交通', receipt:'レシート', delivery:'宅配' };
 let token = load('tm.token', null);
 
 function sheetId(v){ const m = String(v || '').match(/\/d\/([\w-]+)/); return m ? m[1] : String(v || '').trim(); }
-function listStatus(t){ const s = $('#list-status'); if (s) s.textContent = t; }
+function listStatus(t){ ['#list-status', '#trip-status'].forEach(id => { const s = $(id); if (s) s.textContent = t; }); }
 
 function withToken(fn){
   if (token && token.exp > Date.now() + 60000) return fn(token.v);
@@ -556,13 +578,24 @@ async function sheets(path, tok, method = 'GET', body){
   return data;
 }
 
-async function ensureSheet(tok){
+async function ensureSheet(tok, title = SHEET, headers = HEADERS){
   const meta = await sheets('?fields=sheets.properties.title', tok);
-  if (!(meta.sheets || []).some(x => x.properties.title === SHEET))
-    await sheets(':batchUpdate', tok, 'POST', { requests:[{ addSheet:{ properties:{ title:SHEET } } }] });
-  const head = await sheets('/values/' + encodeURIComponent(SHEET + '!A1:N1'), tok);
+  if (!(meta.sheets || []).some(x => x.properties.title === title))
+    await sheets(':batchUpdate', tok, 'POST', { requests:[{ addSheet:{ properties:{ title } } }] });
+  const head = await sheets('/values/' + encodeURIComponent(title + '!A1:Z1'), tok);
   if (!head.values || !head.values.length)
-    await sheets('/values/' + encodeURIComponent(SHEET + '!A1:N1') + '?valueInputOption=RAW', tok, 'PUT', { values:[HEADERS] });
+    await sheets('/values/' + encodeURIComponent(title + '!A1') + '?valueInputOption=RAW', tok, 'PUT', { values:[headers] });
+}
+
+// 指定した出張IDの行だけを入れ替える（A列＝出張ID）
+async function replaceRows(tok, title, headers, tripId, rows){
+  await ensureSheet(tok, title, headers);
+  const cur = await sheets('/values/' + encodeURIComponent(title + '!A2:Z'), tok);
+  const keep = (cur.values || []).filter(r => r[0] !== tripId);
+  await sheets('/values/' + encodeURIComponent(title + '!A2:Z') + ':clear', tok, 'POST', {});
+  const all = keep.concat(rows);
+  if (all.length)
+    await sheets('/values/' + encodeURIComponent(title + '!A2') + '?valueInputOption=USER_ENTERED', tok, 'PUT', { values:all });
 }
 
 async function sendItems(tok){
@@ -580,6 +613,255 @@ async function sendItems(tok){
     renderList(); listStatus(rows.length + '件を送信しました。');
   } catch(e) { $('#b-send').disabled = false; listStatus(e.message); }
 }
+
+// ============================================================
+// 出張・勤務・走行
+// ============================================================
+const KEY_TRIPS = 'tm.trips';
+const LOG_TYPES = ['前日入り', '基本調査', '時間外', '走行'];
+const VEHICLES = ['レンタカー', '自家用車', 'レンタカー＆自家用車'];
+let trips = load(KEY_TRIPS, []);
+let tripMode = null;      // null＝表示 / 'new'＝新規 / 'edit'＝編集
+let logType = '基本調査';
+let logDate = '';
+
+const saveTrips = () => store(KEY_TRIPS, trips);
+const curTrip = () => trips.find(t => t.id === settings.trip) || null;
+const codes = s => String(s || '').split(/[,、，\s]+/).map(x => x.trim()).filter(Boolean);
+const md = d => d ? Number(d.slice(5, 7)) + '/' + Number(d.slice(8, 10)) : '';
+const tripLabel = t => md(t.start) + '〜' + md(t.end) + '　' + t.vehicle;
+function ymd(x){ return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' + String(x.getDate()).padStart(2, '0'); }
+function addDays(d, n){ const x = new Date(d + 'T00:00:00'); x.setDate(x.getDate() + n); return ymd(x); }
+function toMin(t){ if (!t) return null; const [h, m] = t.split(':').map(Number); return h * 60 + m; }
+function tStatus(t, err){ const s = $('#trip-status'); if (s) { s.textContent = t; s.classList.toggle('err', !!err); } }
+function nowText(){ return ymd(new Date()) + ' ' + new Date().toTimeString().slice(0, 5); }
+
+function renderTripLine(){
+  const t = curTrip();
+  $('#trip-line').textContent = t ? '出張：' + tripLabel(t)
+    : '出張が未登録です。「出張」タブで登録すると、明細がその出張にひも付きます。';
+}
+
+function renderTrip(){
+  const t = curTrip();
+  const mode = tripMode || (t ? null : 'new');
+  let h = '<div class="tools">';
+  if (trips.length) h += `<select id="t-sel" aria-label="出張を選ぶ" style="flex:1">${trips.map(x =>
+    `<option value="${esc(x.id)}" ${x.id === settings.trip ? 'selected' : ''}>${esc(tripLabel(x))}</option>`).join('')}</select>`;
+  if (mode !== 'new') h += '<button class="ghost" id="t-new">新しい出張</button>';
+  h += '</div>';
+  h += mode ? tripForm(mode === 'edit' ? t : null)
+    : tripSummary(t) + logForm(t) + logList(t) + tripCalc(t) +
+      `<button class="primary" id="t-send">${t.sent ? '送信済み（もう一度送る）' : 'この出張をスプレッドシートに送る'}</button>`;
+  h += '<div class="status" id="trip-status" role="status"></div>';
+  $('#trip').innerHTML = h;
+  bindTrip(t, mode);
+}
+
+function tripForm(t){
+  const v = t || { start:today(), end:today(), vehicle:'レンタカー', cc:'over', advance:'', emp:[settings.user || '自分'], pt:[] };
+  return `<h2>${t ? '出張を編集' : '新しい出張'}</h2>
+  <div class="row2">
+    <div><label for="t-start">開始日</label><input id="t-start" type="date" value="${esc(v.start)}"></div>
+    <div><label for="t-end">終了日</label><input id="t-end" type="date" value="${esc(v.end)}"></div>
+  </div>
+  <label for="t-veh">使用車両</label>
+  <select id="t-veh">${VEHICLES.map(x => `<option ${x === v.vehicle ? 'selected' : ''}>${x}</option>`).join('')}</select>
+  <label for="t-cc">レンタカーの排気量（車損料の単価）</label>
+  <select id="t-cc"><option value="over" ${v.cc !== 'under' ? 'selected' : ''}>1,800cc以上（12円/km）</option>
+    <option value="under" ${v.cc === 'under' ? 'selected' : ''}>1,800cc未満（10円/km）</option></select>
+  <label for="t-adv">仮払金（円）</label><input id="t-adv" class="yen" inputmode="numeric" value="${esc(v.advance)}">
+  <label for="t-emp">社員（記号をカンマ区切りで）</label><input id="t-emp" placeholder="例：自分, 社員B" value="${esc(v.emp.join(', '))}">
+  <label for="t-pt">アルバイト（記号をカンマ区切りで）</label><input id="t-pt" placeholder="例：バイト1, バイト2" value="${esc(v.pt.join(', '))}">
+  <button class="primary" id="t-save">${t ? '変更を保存' : '出張を登録'}</button>
+  ${trips.length ? '<div class="tools"><button class="ghost" id="t-cancel">キャンセル</button></div>' : ''}`;
+}
+
+function tripSummary(t){
+  return `<div class="slip">
+    <button class="ghost del" id="t-edit" style="color:var(--brand)">編集</button>
+    <p><b>${esc(md(t.start))}〜${esc(md(t.end))}</b>　${esc(t.vehicle)}${t.sent ? '' : '<span class="tag">未送信</span>'}</p>
+    <p class="sub">社員：${esc(t.emp.join('、') || 'なし')}<br>アルバイト：${esc(t.pt.join('、') || 'なし')}<br>
+    仮払金：${t.advance ? yen(t.advance) + '円' : '未入力'}</p></div>`;
+}
+
+function logForm(t){
+  const dates = [];
+  for (let d = addDays(t.start, -1); d <= t.end && dates.length < 62; d = addDays(d, 1)) dates.push(d);
+  if (!dates.includes(logDate)) logDate = t.start;
+  const all = t.emp.concat(t.pt);
+  const chips = `<label>メンバー</label><div class="chips" id="l-mem">${all.map(m =>
+    `<label><input type="checkbox" value="${esc(m)}" checked>${esc(m)}</label>`).join('')}</div>`;
+  let f = '';
+  if (logType === '前日入り') f = chips + `<div class="row2">
+      <div><label for="l-move">移動</label><select id="l-move"><option>4h以上</option><option>4h未満</option></select></div>
+      <div><label for="l-time">集合時間</label><input id="l-time" type="time" step="1800"></div></div>
+    <label for="l-place">集合場所</label><input id="l-place" placeholder="例：会社、駅名、宿">`;
+  if (logType === '基本調査') f = chips + `<div class="row2">
+      <div><label for="l-start">開始</label><input id="l-start" type="time" step="1800" value="09:00"></div>
+      <div><label for="l-end">終了</label><input id="l-end" type="time" step="1800" value="17:00"></div></div>
+    <label class="check"><input id="l-half" type="checkbox">半日調査</label>`;
+  if (logType === '時間外') f = chips + `<div class="row2">
+      <div><label for="l-start">開始</label><input id="l-start" type="time" step="1800"></div>
+      <div><label for="l-end">終了</label><input id="l-end" type="time" step="1800"></div></div>
+    <label for="l-work">作業時間（休憩を除く・時間）</label><input id="l-work" type="number" step="0.5" min="0" inputmode="decimal">`;
+  if (logType === '走行') f = `<label for="l-route">走行ルート概略</label><input id="l-route" placeholder="例：レンタカー店→IC→宿">
+    <div class="row2">
+      <div><label for="l-km">距離（km）</label><input id="l-km" type="number" min="0" inputmode="decimal"></div>
+      <div><label for="l-driver">運転者（社員）</label><select id="l-driver">${t.emp.map(m => `<option>${esc(m)}</option>`).join('')}</select></div>
+    </div>
+    ${t.vehicle === 'レンタカー＆自家用車' ? `<label for="l-car">車両</label><select id="l-car"><option>レンタカー</option><option>自家用車</option></select>` : ''}`;
+  return `<h2>記録を追加</h2>
+  <div class="kinds four" role="group" aria-label="記録の種類">${LOG_TYPES.map(x =>
+    `<button data-lt="${x}" aria-pressed="${x === logType}">${x}</button>`).join('')}</div>
+  <label for="l-date">日付</label>
+  <select id="l-date">${dates.map(d => `<option value="${d}" ${d === logDate ? 'selected' : ''}>${md(d)}${d < t.start ? '（前日）' : ''}</option>`).join('')}</select>
+  ${f}
+  <button class="primary" id="l-add">記録を追加</button>`;
+}
+
+function logText(l){
+  const mem = (l.members || []).join('、');
+  if (l.type === '前日入り') return mem + '　' + l.move + (l.start ? '　' + l.start + '集合' : '') + (l.place ? '（' + l.place + '）' : '');
+  if (l.type === '基本調査') return mem + '　' + l.start + '〜' + l.end + (l.half ? '　半日' : '');
+  if (l.type === '時間外') return mem + '　' + (l.start ? l.start + '〜' + l.end + '　' : '') + l.work + '時間';
+  return (l.route || '') + '　' + l.km + 'km　運転：' + l.driver + (l.car ? '　' + l.car : '');
+}
+
+function logList(t){
+  if (!t.logs.length) return '<p class="empty">まだ記録がありません。</p>';
+  const sorted = t.logs.slice().sort((a, b) => a.date.localeCompare(b.date) || LOG_TYPES.indexOf(a.type) - LOG_TYPES.indexOf(b.type));
+  return '<h2>記録</h2>' + sorted.map(l => `<div class="item">
+    <div>${esc(md(l.date))}　${esc(l.type)}<div class="m">${esc(logText(l))}</div></div>
+    <button class="ghost" data-log="${esc(l.id)}">削除</button></div>`).join('');
+}
+
+function calcTrip(t){
+  const days = {}, ot = {}, pre = {}, dayKm = {}, cars = {}, drive = {};
+  for (const l of t.logs) {
+    for (const m of l.members || []) {
+      if (l.type === '基本調査') (days[m] = days[m] || new Set()).add(l.date);
+      if (l.type === '時間外') ot[m] = (ot[m] || 0) + (Number(l.work) || 0);
+      if (l.type === '前日入り') (pre[m] = pre[m] || []).push(md(l.date) + ' ' + l.move);
+    }
+    if (l.type === '走行') {
+      const k = l.date + '|' + l.driver; dayKm[k] = (dayKm[k] || 0) + (Number(l.km) || 0);
+      const c = l.car || t.vehicle; cars[c] = cars[c] || { km:0, dates:new Set() };
+      cars[c].km += Number(l.km) || 0; if (Number(l.km) > 0) cars[c].dates.add(l.date);
+    }
+  }
+  for (const [k, km] of Object.entries(dayKm)) {
+    const tier = km >= 350 ? 2 : km >= 250 ? 1 : km >= 150 ? 0 : -1;
+    if (tier >= 0) { const d = k.split('|')[1]; (drive[d] = drive[d] || [0, 0, 0])[tier]++; }
+  }
+  return { days, ot, pre, drive, cars };
+}
+
+function tripCalc(t){
+  const c = calcTrip(t), line = (a, b) => `<p>${a}　<b>${b}</b></p>`;
+  let h = '<h2>集計の目安</h2><div class="slip calc">';
+  const dd = Object.entries(c.days);
+  h += '<p class="sub">通常日当（基本調査の日数）</p>' + (dd.length ? dd.map(([m, s]) => line(esc(m), s.size + '日')).join('') : '<p>なし</p>');
+  const oo = Object.entries(c.ot);
+  h += '<p class="sub">時間外日当（作業時間の合計）</p>' + (oo.length ? oo.map(([m, v]) => line(esc(m), v + '時間')).join('') : '<p>なし</p>');
+  const pp = Object.entries(c.pre);
+  if (pp.length) h += '<p class="sub">前日入り（日当への反映方法は未確定）</p>' + pp.map(([m, v]) => line(esc(m), esc(v.join('、')))).join('');
+  const PRICE = [400, 800, 1200], LABEL = ['150〜250km', '250〜350km', '350km以上'];
+  const dr = Object.entries(c.drive);
+  h += '<p class="sub">運転手当</p>' + (dr.length ? dr.map(([m, n]) => line(esc(m),
+    n.map((x, i) => x ? LABEL[i] + '×' + x + '日' : '').filter(Boolean).join('、') + '　' + yen(n.reduce((a, x, i) => a + x * PRICE[i], 0)) + '円')).join('') : '<p>対象なし</p>');
+  h += '<p class="sub">車両費</p>';
+  const rent = c.cars['レンタカー'], own = c.cars['自家用車'];
+  if (!rent && !own) h += '<p>走行の記録なし</p>';
+  if (rent) {
+    const n = rent.dates.size, rate = t.cc === 'under' ? 10 : 12;
+    const loss = Math.max(rate * rent.km, 4000 * n), ins = Math.max(3 * rent.km, 400 * n);
+    h += line('レンタカー ' + yen(rent.km) + 'km・' + n + '日', yen(loss + ins) + '円') +
+      `<p class="sub">車損料 ${yen(loss)}円（${rate}円×km と 4,000円×日数の高い方）＋保険料 ${yen(ins)}円（3円×km と 400円×日数の高い方）</p>`;
+  }
+  if (own) h += line('自家用車 ' + own.dates.size + '日', yen(6000 * own.dates.size) + '円');
+  return h + '</div>';
+}
+
+function bindTrip(t, mode){
+  const sel = $('#t-sel');
+  if (sel) sel.onchange = () => { settings.trip = sel.value; store(KEY_SET, settings); tripMode = null; renderTrip(); };
+  const nb = $('#t-new'); if (nb) nb.onclick = () => { tripMode = 'new'; renderTrip(); };
+  if (mode) {
+    const cb = $('#t-cancel'); if (cb) cb.onclick = () => { tripMode = null; renderTrip(); };
+    $('#t-save').onclick = () => {
+      const v = { start:$('#t-start').value, end:$('#t-end').value, vehicle:$('#t-veh').value, cc:$('#t-cc').value,
+        advance:num($('#t-adv').value) ?? '', emp:codes($('#t-emp').value), pt:codes($('#t-pt').value) };
+      if (!v.start || !v.end || v.start > v.end) return tStatus('開始日と終了日を確認してください。', true);
+      if (!v.emp.length) return tStatus('社員を1人以上入力してください。', true);
+      if (mode === 'edit') Object.assign(t, v, { sent:false });
+      else {
+        const id = 'T' + v.start.replace(/-/g, '') + '-' + (settings.inputter || 'A') + '-' + Math.random().toString(36).slice(2, 6);
+        trips.push(Object.assign({ id, logs:[], sent:false }, v)); settings.trip = id; store(KEY_SET, settings);
+      }
+      if (!saveTrips()) return tStatus('保存できませんでした。ブラウザの保存領域を確認してください。', true);
+      tripMode = null; renderTrip(); tStatus(mode === 'edit' ? '変更を保存しました。' : '出張を登録しました。');
+    };
+    return;
+  }
+  $('#t-edit').onclick = () => { tripMode = 'edit'; renderTrip(); };
+  $('#l-date').onchange = e => logDate = e.target.value;
+  document.querySelectorAll('[data-lt]').forEach(b => b.onclick = () => { logType = b.dataset.lt; renderTrip(); });
+  if (logType === '時間外') {
+    const auto = () => { const a = toMin($('#l-start').value), b = toMin($('#l-end').value);
+      if (a !== null && b !== null) $('#l-work').value = ((b - a + 1440) % 1440) / 60; };
+    $('#l-start').onchange = auto; $('#l-end').onchange = auto;
+  }
+  $('#l-add').onclick = () => addLog(t);
+  document.querySelectorAll('[data-log]').forEach(b => b.onclick = () => {
+    if (!confirm('この記録を削除しますか？')) return;
+    t.logs = t.logs.filter(l => l.id !== b.dataset.log); t.sent = false; saveTrips(); renderTrip();
+  });
+  $('#t-send').onclick = () => withToken(tok => sendTrip(tok, t));
+}
+
+function addLog(t){
+  const l = { id:crypto.randomUUID(), date:$('#l-date').value, type:logType };
+  logDate = l.date;
+  if (logType !== '走行') {
+    l.members = [...document.querySelectorAll('#l-mem input:checked')].map(i => i.value);
+    if (!l.members.length) return tStatus('メンバーを1人以上選んでください。', true);
+  }
+  if (logType === '前日入り') Object.assign(l, { move:$('#l-move').value, start:$('#l-time').value, place:$('#l-place').value.trim() });
+  if (logType === '基本調査') {
+    Object.assign(l, { start:$('#l-start').value, end:$('#l-end').value, half:$('#l-half').checked });
+    if (!l.start || !l.end) return tStatus('開始と終了の時刻を入力してください。', true);
+  }
+  if (logType === '時間外') {
+    Object.assign(l, { start:$('#l-start').value, end:$('#l-end').value, work:Number($('#l-work').value) });
+    if (!(l.work > 0)) return tStatus('作業時間を入力してください。', true);
+  }
+  if (logType === '走行') {
+    Object.assign(l, { route:$('#l-route').value.trim(), km:Number($('#l-km').value), driver:$('#l-driver').value });
+    if ($('#l-car')) l.car = $('#l-car').value;
+    if (!(l.km > 0)) return tStatus('距離を入力してください。', true);
+    if (!l.driver) return tStatus('運転者にする社員を出張に登録してください。', true);
+  }
+  t.logs.push(l); t.sent = false;
+  if (!saveTrips()) return tStatus('保存できませんでした。', true);
+  renderTrip(); tStatus(md(l.date) + 'の' + l.type + 'を追加しました。');
+}
+
+async function sendTrip(tok, t){
+  $('#t-send').disabled = true; tStatus('送信しています…');
+  try {
+    await replaceRows(tok, '出張', ['出張ID','入力者','開始日','終了日','使用車両','排気量','仮払金','社員','アルバイト','更新日時'], t.id,
+      [[t.id, settings.inputter, t.start, t.end, t.vehicle, t.cc === 'under' ? '1800cc未満' : '1800cc以上', t.advance, t.emp.join(','), t.pt.join(','), nowText()]]);
+    await replaceRows(tok, '勤務', ['出張ID','日付','種類','メンバー','開始','終了','移動','集合場所','半日','作業時間'], t.id,
+      t.logs.filter(l => l.type !== '走行').map(l => [t.id, l.date, l.type, l.members.join(','), l.start || '', l.end || '',
+        l.move || '', l.place || '', l.half ? '○' : '', l.type === '時間外' ? l.work : '']));
+    await replaceRows(tok, '走行', ['出張ID','日付','ルート','距離km','運転者','車両'], t.id,
+      t.logs.filter(l => l.type === '走行').map(l => [t.id, l.date, l.route || '', l.km, l.driver, l.car || t.vehicle]));
+    t.sent = true; saveTrips(); renderTrip(); tStatus('送信しました。');
+  } catch(e) { $('#t-send').disabled = false; tStatus(e.message, true); }
+}
+
+renderTripLine();
 
 if (!settings.key) setStatus('最初に「設定」でGemini APIキーを入力してください。');
 </script>
