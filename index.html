@@ -57,8 +57,12 @@ input:focus,select:focus,button:focus-visible{outline:3px solid var(--brand);out
 .item button{grid-column:2;justify-self:end}
 .total{display:flex;justify-content:space-between;font-weight:700;padding:12px 0;font-variant-numeric:tabular-nums}
 .tag{display:inline-block;font-size:12px;padding:0 6px;border-radius:4px;border:1px solid var(--warn);color:var(--warn);margin-left:6px}
-.kinds.four{grid-template-columns:repeat(4,1fr)}
-.kinds.four button{font-size:14px;padding:12px 2px}
+.kinds.four{grid-template-columns:repeat(5,1fr);gap:6px}
+.kinds.four button{font-size:13px;padding:12px 0}
+.no{display:inline-block;min-width:2.2em;font-weight:700;font-variant-numeric:tabular-nums}
+.mark{font-size:12px;color:var(--brand);border:1px solid var(--brand);border-radius:4px;padding:0 5px;margin-left:6px}
+.pay p{display:flex;justify-content:space-between;gap:8px}
+.neg{color:var(--bad)}
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
 .chips label{display:inline-flex;align-items:center;gap:6px;margin:0;padding:6px 12px;border:1px solid var(--rule);
   border-radius:999px;background:var(--paper);color:var(--ink);font-size:14px}
@@ -140,6 +144,7 @@ nav button[aria-current=page]{color:var(--brand);font-weight:700;box-shadow:inse
   </section>
 </main>
 
+<datalist id="dl-members"></datalist>
 <nav>
   <button data-v="trip">出張</button>
   <button data-v="read" aria-current="page">読み取り</button>
@@ -427,6 +432,7 @@ $('#b-read').onclick = async () => {
     if (kind === 'rail') await readRail();
     else if (kind === 'receipt') await readReceipt();
     else await readDelivery();
+    pending.forEach(p => p.payer = p.payer || defaultPayer());
     setStatus('内容を確認して、必要なら直してから保存してください。');
     renderPending();
   } catch(e) { setStatus(e.message, true); }
@@ -441,6 +447,7 @@ function slipHtml(p, i){
       <div><label>日付</label><input type="date" data-f="date" value="${esc(p.date)}"></div>
       <div><label>利用者</label><input data-f="user" value="${esc(p.user)}"></div>
     </div>
+    <label>支払った人</label><input data-f="payer" list="dl-members" value="${esc(p.payer)}">
     <label>支払先</label><input data-f="payee" value="${esc(p.payee)}">
     ${isRail ? `<div class="row2">
       <div><label>乗車駅</label><input data-f="c1" value="${esc(p.c1)}"></div>
@@ -519,7 +526,7 @@ function renderList(){
   const unsent = items.filter(p => !p.sent).length;
   $('#list').innerHTML = sorted.map(p => `<div class="item">
       <div>${esc(p.payee)}　${esc(p.kind === 'rail' ? p.c1 + ' → ' + p.c2 : p.c1)}
-        <div class="m">${esc(p.date)}　${esc(p.user)}${p.kubun ? '　' + esc(p.kubun) : ''}${p.note ? '　' + esc(p.note) : ''}${p.sent ? '' : '<span class="tag">未送信</span>'}</div></div>
+        <div class="m">${esc(p.date)}　${esc(p.user)}　支払：<button class="ghost" style="padding:0 6px;font-size:13px" data-payer="${esc(p.id)}">${esc(p.payer || '未設定')}</button>${p.kubun ? '　' + esc(p.kubun) : ''}${p.note ? '　' + esc(p.note) : ''}${p.sent ? '' : '<span class="tag">未送信</span>'}</div></div>
       <div class="a">${yen(p.amount)}円</div>
       <button class="ghost" data-id="${esc(p.id)}">削除</button>
     </div>`).join('') +
@@ -531,6 +538,11 @@ function renderList(){
     const it = items.find(p => p.id === b.dataset.id);
     if (!confirm(it && it.sent ? 'このスマホから削除します。スプレッドシート側の行は残るので、必要ならそちらも消してください。' : 'この明細を削除しますか？')) return;
     items = items.filter(p => p.id !== b.dataset.id); store(KEY_ITEMS, items); renderList();
+  });
+  $('#list').querySelectorAll('[data-payer]').forEach(b => b.onclick = () => {
+    const it = items.find(p => p.id === b.dataset.payer); if (!it) return;
+    const v = prompt('支払った人の記号', it.payer || defaultPayer()); if (v === null || !v.trim()) return;
+    it.payer = v.trim(); it.sent = false; store(KEY_ITEMS, items); renderList();
   });
   $('#b-send').onclick = () => withToken(sendItems);
   $('#b-copy').onclick = async () => {
@@ -547,7 +559,7 @@ function renderList(){
 // ============================================================
 const SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 const SHEET = '明細';
-const HEADERS = ['明細ID','出張ID','入力者','日付','利用者','種別','支払先','内容1','内容2','区分','金額','備考','出力済','登録日時'];
+const HEADERS = ['明細ID','出張ID','入力者','日付','利用者','種別','支払先','内容1','内容2','区分','金額','備考','出力済','登録日時','支払者'];
 const KIND_LABEL = { rail:'交通', receipt:'レシート', delivery:'宅配' };
 let token = load('tm.token', null);
 
@@ -583,15 +595,16 @@ async function ensureSheet(tok, title = SHEET, headers = HEADERS){
   if (!(meta.sheets || []).some(x => x.properties.title === title))
     await sheets(':batchUpdate', tok, 'POST', { requests:[{ addSheet:{ properties:{ title } } }] });
   const head = await sheets('/values/' + encodeURIComponent(title + '!A1:Z1'), tok);
-  if (!head.values || !head.values.length)
+  const cur = (head.values && head.values[0]) || [];
+  if (headers.some((h, i) => cur.at(i) !== h))
     await sheets('/values/' + encodeURIComponent(title + '!A1') + '?valueInputOption=RAW', tok, 'PUT', { values:[headers] });
 }
 
 // 指定した出張IDの行だけを入れ替える（A列＝出張ID）
-async function replaceRows(tok, title, headers, tripId, rows){
+async function replaceRows(tok, title, headers, tripId, rows, drop){
   await ensureSheet(tok, title, headers);
   const cur = await sheets('/values/' + encodeURIComponent(title + '!A2:Z'), tok);
-  const keep = (cur.values || []).filter(r => r[0] !== tripId);
+  const keep = (cur.values || []).filter(r => drop ? !drop.has(r[0]) : r[0] !== tripId);
   await sheets('/values/' + encodeURIComponent(title + '!A2:Z') + ':clear', tok, 'POST', {});
   const all = keep.concat(rows);
   if (all.length)
@@ -603,12 +616,11 @@ async function sendItems(tok){
   if (!targets.length) return;
   $('#b-send').disabled = true; listStatus('送信しています…');
   try {
-    await ensureSheet(tok);
     const rows = targets.map(p => [p.id, p.tripId || '', settings.inputter, p.date, p.user, KIND_LABEL[p.kind] || p.kind,
       p.payee, p.c1, p.c2 || '', p.kubun || '', p.amount, p.note || '', false,
-      (p.createdAt || '').replace('T', ' ').slice(0, 16)]);
-    await sheets('/values/' + encodeURIComponent(SHEET + '!A1') + ':append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS',
-      tok, 'POST', { values:rows });
+      (p.createdAt || '').replace('T', ' ').slice(0, 16), p.payer || '']);
+    // 同じ明細IDの行は入れ替える（支払者などを直して再送しても重複しない）
+    await replaceRows(tok, SHEET, HEADERS, null, rows, new Set(targets.map(p => p.id)));
     targets.forEach(p => p.sent = true); store(KEY_ITEMS, items);
     renderList(); listStatus(rows.length + '件を送信しました。');
   } catch(e) { $('#b-send').disabled = false; listStatus(e.message); }
@@ -618,7 +630,8 @@ async function sendItems(tok){
 // 出張・勤務・走行
 // ============================================================
 const KEY_TRIPS = 'tm.trips';
-const LOG_TYPES = ['前日入り', '基本調査', '時間外', '走行'];
+const LOG_TYPES = ['前日入り', '基本調査', '時間外', '走行', '宿泊'];
+const RATE = { day:500, ot:1000, night:9500, drive:[400, 800, 1200] };
 const VEHICLES = ['レンタカー', '自家用車', 'レンタカー＆自家用車'];
 let trips = load(KEY_TRIPS, []);
 let tripMode = null;      // null＝表示 / 'new'＝新規 / 'edit'＝編集
@@ -637,6 +650,7 @@ function tStatus(t, err){ const s = $('#trip-status'); if (s) { s.textContent = 
 function nowText(){ return ymd(new Date()) + ' ' + new Date().toTimeString().slice(0, 5); }
 
 function renderTripLine(){
+  fillMembers();
   const t = curTrip();
   $('#trip-line').textContent = t ? '出張：' + tripLabel(t)
     : '出張が未登録です。「出張」タブで登録すると、明細がその出張にひも付きます。';
@@ -655,11 +669,12 @@ function renderTrip(){
       `<button class="primary" id="t-send">${t.sent ? '送信済み（もう一度送る）' : 'この出張をスプレッドシートに送る'}</button>`;
   h += '<div class="status" id="trip-status" role="status"></div>';
   $('#trip').innerHTML = h;
+  fillMembers();
   bindTrip(t, mode);
 }
 
 function tripForm(t){
-  const v = t || { start:today(), end:today(), vehicle:'レンタカー', cc:'over', advance:'', emp:[settings.user || '自分'], pt:[] };
+  const v = Object.assign({ writer:'', carTo:'' }, t || { start:today(), end:today(), vehicle:'レンタカー', cc:'over', advance:'', emp:[settings.user || '自分'], pt:[] });
   return `<h2>${t ? '出張を編集' : '新しい出張'}</h2>
   <div class="row2">
     <div><label for="t-start">開始日</label><input id="t-start" type="date" value="${esc(v.start)}"></div>
@@ -673,6 +688,10 @@ function tripForm(t){
   <label for="t-adv">仮払金（円）</label><input id="t-adv" class="yen" inputmode="numeric" value="${esc(v.advance)}">
   <label for="t-emp">社員（記号をカンマ区切りで）</label><input id="t-emp" placeholder="例：自分, 社員B" value="${esc(v.emp.join(', '))}">
   <label for="t-pt">アルバイト（記号をカンマ区切りで）</label><input id="t-pt" placeholder="例：バイト1, バイト2" value="${esc(v.pt.join(', '))}">
+  <div class="row2">
+    <div><label for="t-writer">記入者（振込を受ける社員）</label><input id="t-writer" placeholder="空欄＝最初の社員" value="${esc(v.writer)}"></div>
+    <div><label for="t-carto">車両費の受取人</label><input id="t-carto" placeholder="空欄＝記入者" value="${esc(v.carTo)}"></div>
+  </div>
   <button class="primary" id="t-save">${t ? '変更を保存' : '出張を登録'}</button>
   ${trips.length ? '<div class="tools"><button class="ghost" id="t-cancel">キャンセル</button></div>' : ''}`;
 }
@@ -711,6 +730,10 @@ function logForm(t){
       <div><label for="l-driver">運転者（社員）</label><select id="l-driver">${t.emp.map(m => `<option>${esc(m)}</option>`).join('')}</select></div>
     </div>
     ${t.vehicle === 'レンタカー＆自家用車' ? `<label for="l-car">車両</label><select id="l-car"><option>レンタカー</option><option>自家用車</option></select>` : ''}`;
+  if (logType === '宿泊') f = chips + `<div class="row2">
+      <div><label for="l-payer">宿代を払った人</label><select id="l-payer"><option>各自</option>${all.map(m => `<option>${esc(m)}</option>`).join('')}</select></div>
+      <div><label for="l-cost">1人あたりの実費（円）</label><input id="l-cost" class="yen" inputmode="numeric" placeholder="各自なら不要"></div></div>
+    <p class="sub">日付は泊まった夜の日付です。宿泊費は1人1泊${yen(RATE.night)}円で計算します。</p>`;
   return `<h2>記録を追加</h2>
   <div class="kinds four" role="group" aria-label="記録の種類">${LOG_TYPES.map(x =>
     `<button data-lt="${x}" aria-pressed="${x === logType}">${x}</button>`).join('')}</div>
@@ -725,6 +748,7 @@ function logText(l){
   if (l.type === '前日入り') return mem + '　' + l.move + (l.start ? '　' + l.start + '集合' : '') + (l.place ? '（' + l.place + '）' : '');
   if (l.type === '基本調査') return mem + '　' + l.start + '〜' + l.end + (l.half ? '　半日' : '');
   if (l.type === '時間外') return mem + '　' + (l.start ? l.start + '〜' + l.end + '　' : '') + l.work + '時間';
+  if (l.type === '宿泊') return mem + '　宿代：' + (l.payer === '各自' ? '各自払い' : l.payer + 'が払った（1人' + yen(l.cost) + '円）');
   return (l.route || '') + '　' + l.km + 'km　運転：' + l.driver + (l.car ? '　' + l.car : '');
 }
 
@@ -737,12 +761,13 @@ function logList(t){
 }
 
 function calcTrip(t){
-  const days = {}, ot = {}, pre = {}, dayKm = {}, cars = {}, drive = {};
+  const days = {}, ot = {}, pre = {}, dayKm = {}, cars = {}, drive = {}, nights = {};
   for (const l of t.logs) {
     for (const m of l.members || []) {
       if (l.type === '基本調査') (days[m] = days[m] || new Set()).add(l.date);
       if (l.type === '時間外') ot[m] = (ot[m] || 0) + (Number(l.work) || 0);
       if (l.type === '前日入り') (pre[m] = pre[m] || []).push(md(l.date) + ' ' + l.move);
+      if (l.type === '宿泊') nights[m] = (nights[m] || 0) + 1;
     }
     if (l.type === '走行') {
       const k = l.date + '|' + l.driver; dayKm[k] = (dayKm[k] || 0) + (Number(l.km) || 0);
@@ -754,7 +779,63 @@ function calcTrip(t){
     const tier = km >= 350 ? 2 : km >= 250 ? 1 : km >= 150 ? 0 : -1;
     if (tier >= 0) { const d = k.split('|')[1]; (drive[d] = drive[d] || [0, 0, 0])[tier]++; }
   }
-  return { days, ot, pre, drive, cars };
+  return { days, ot, pre, drive, cars, nights };
+}
+
+function vehicleCost(t, c){
+  const rent = c.cars['レンタカー'], own = c.cars['自家用車'], r = { total:0 };
+  if (rent) {
+    const n = rent.dates.size, rate = t.cc === 'under' ? 10 : 12;
+    r.rent = { km:rent.km, n, rate, loss:Math.max(rate * rent.km, 4000 * n), ins:Math.max(3 * rent.km, 400 * n) };
+    r.total += r.rent.loss + r.rent.ins;
+  }
+  if (own) { r.own = { n:own.dates.size, amt:6000 * own.dates.size }; r.total += r.own.amt; }
+  return r;
+}
+
+const writerOf = t => t.writer || t.emp[0];
+const defaultPayer = () => { const t = curTrip(); return t ? writerOf(t) : (settings.user || '自分'); };
+function fillMembers(){
+  const t = curTrip();
+  $('#dl-members').innerHTML = (t ? t.emp.concat(t.pt) : []).map(m => `<option value="${esc(m)}">`).join('');
+}
+
+// 精算書の並び：交通費→ガソリン代→駐車場→宅配→その他の領収書→宿泊費
+function groupOf(p){
+  if (p.kind === 'rail') return 0;
+  if (p.kind === 'delivery') return 3;
+  if (p.c1 === 'ガソリン代') return 1;
+  if (p.c1 === '駐車場') return 2;
+  return 4;
+}
+function sheetRows(t){
+  const c = calcTrip(t);
+  const rows = items.filter(p => p.tripId === t.id)
+    .sort((a, b) => groupOf(a) - groupOf(b) || (a.date || '').localeCompare(b.date || ''))
+    .map(p => ({ date:p.date, payee:p.payee, c1:p.kind === 'rail' ? p.c1 + '→' + p.c2 : p.c1, kubun:p.kubun || '', amount:p.amount || 0,
+      receipt:p.kind !== 'rail', user:p.user }));
+  for (const m of t.emp.concat(t.pt)) {
+    const n = c.nights[m] || 0;
+    if (n) rows.push({ date:'', payee:t.emp.includes(m) ? '社員' : 'アルバイト', c1:'宿泊費', kubun:n + '泊', amount:RATE.night * n, receipt:false, user:m });
+  }
+  return rows;
+}
+const circ = n => n <= 20 ? String.fromCharCode(0x245F + n) : n <= 35 ? String.fromCharCode(0x3250 + n - 20) : n <= 50 ? String.fromCharCode(0x32B1 + n - 36) : '(' + n + ')';
+
+function settle(t){
+  const c = calcTrip(t), v = vehicleCost(t, c), writer = writerOf(t), P = {};
+  const get = m => P[m] = P[m] || { right:0, paid:0, hotel:0 };
+  t.emp.concat(t.pt).forEach(get);
+  for (const m of t.emp) get(m).right += RATE.day * (c.days[m] ? c.days[m].size : 0) + RATE.ot * (c.ot[m] || 0);
+  for (const [m, n] of Object.entries(c.drive)) get(m).right += n.reduce((a, x, i) => a + x * RATE.drive.at(i), 0);
+  for (const [m, n] of Object.entries(c.nights)) get(m).right += RATE.night * n;
+  if (v.total) get(t.carTo || writer).right += v.total;
+  const its = items.filter(p => p.tripId === t.id);
+  for (const p of its) get(p.payer || writer).paid += p.amount || 0;
+  for (const l of t.logs) if (l.type === '宿泊' && l.payer !== '各自' && l.cost > 0)
+    for (const m of l.members) if (m !== l.payer) { get(m).hotel -= l.cost; get(l.payer).hotel += l.cost; }
+  const company = Object.values(P).reduce((a, x) => a + x.right + x.paid, 0);
+  return { P, writer, company, transfer:company - (Number(t.advance) || 0), vehicle:v };
 }
 
 function tripCalc(t){
@@ -770,16 +851,37 @@ function tripCalc(t){
   const dr = Object.entries(c.drive);
   h += '<p class="sub">運転手当</p>' + (dr.length ? dr.map(([m, n]) => line(esc(m),
     n.map((x, i) => x ? LABEL[i] + '×' + x + '日' : '').filter(Boolean).join('、') + '　' + yen(n.reduce((a, x, i) => a + x * PRICE[i], 0)) + '円')).join('') : '<p>対象なし</p>');
+  const nn = Object.entries(c.nights);
+  h += '<p class="sub">宿泊費（' + yen(RATE.night) + '円×泊）</p>' + (nn.length ? nn.map(([m, n]) => line(esc(m), n + '泊　' + yen(RATE.night * n) + '円')).join('') : '<p>なし</p>');
   h += '<p class="sub">車両費</p>';
-  const rent = c.cars['レンタカー'], own = c.cars['自家用車'];
-  if (!rent && !own) h += '<p>走行の記録なし</p>';
-  if (rent) {
-    const n = rent.dates.size, rate = t.cc === 'under' ? 10 : 12;
-    const loss = Math.max(rate * rent.km, 4000 * n), ins = Math.max(3 * rent.km, 400 * n);
-    h += line('レンタカー ' + yen(rent.km) + 'km・' + n + '日', yen(loss + ins) + '円') +
-      `<p class="sub">車損料 ${yen(loss)}円（${rate}円×km と 4,000円×日数の高い方）＋保険料 ${yen(ins)}円（3円×km と 400円×日数の高い方）</p>`;
+  const v = vehicleCost(t, c);
+  if (!v.rent && !v.own) h += '<p>走行の記録なし</p>';
+  if (v.rent) h += line('レンタカー ' + yen(v.rent.km) + 'km・' + v.rent.n + '日', yen(v.rent.loss + v.rent.ins) + '円') +
+      `<p class="sub">車損料 ${yen(v.rent.loss)}円（${v.rent.rate}円×km と 4,000円×日数の高い方）＋保険料 ${yen(v.rent.ins)}円（3円×km と 400円×日数の高い方）</p>`;
+  if (v.own) h += line('自家用車 ' + v.own.n + '日', yen(v.own.amt) + '円');
+  h += '</div>';
+
+  // 精算書の並びと領収書の番号
+  const rows = sheetRows(t);
+  h += '<h2>精算書の並び（No.）</h2><div class="slip calc">';
+  h += rows.length ? rows.map((r, i) => `<p><span><span class="no">${i + 1}</span>${esc(r.date ? md(r.date) : '')}　${esc(r.payee)}　${esc(r.c1)}${r.c1 === '宿泊費' ? '（' + esc(r.user) + '）' : ''}${r.kubun ? '　' + esc(r.kubun) : ''}${r.receipt ? '<span class="mark">領収書に' + circ(i + 1) + '</span>' : ''}</span>　<b>${yen(r.amount)}円</b></p>`).join('')
+    + `<p class="sub">種類ごとに並べています。明細を追加・削除すると番号が変わるので、領収書への書き込みは全部そろってから行ってください。${rows.length > 39 ? '<br><b class="neg">精算書の明細欄（39行）を超えています。</b>' : ''}</p>`
+    : '<p>この出張の明細はまだありません。</p>';
+  h += '</div>';
+
+  // 立替精算
+  const s = settle(t);
+  h += '<h2>精算（手渡し額）</h2><div class="slip calc pay">';
+  h += `<p><span>会社からの合計</span><b>${yen(s.company)}円</b></p>`;
+  h += `<p><span>記入者（${esc(s.writer)}）への振込見込</span><b class="${s.transfer < 0 ? 'neg' : ''}">${yen(s.transfer)}円</b></p>`;
+  if (Number(t.advance)) h += `<p class="sub">仮払金 ${yen(t.advance)}円を差し引いた額です。${s.transfer < 0 ? 'マイナスは返金になります。' : ''}</p>`;
+  for (const [m, x] of Object.entries(s.P)) {
+    const recv = x.right + x.paid + x.hotel;
+    const what = m === s.writer ? '受取（記入者の取り分）' : recv >= 0 ? '記入者から受け取る' : '記入者へ渡す';
+    h += `<p><span>${esc(m)}　${what}</span><b class="${recv < 0 ? 'neg' : ''}">${yen(Math.abs(recv))}円</b></p>
+      <p class="sub" style="display:block">手当 ${yen(x.right)}円　立替 ${yen(x.paid)}円${x.hotel ? '　宿代調整 ' + (x.hotel > 0 ? '+' : '−') + yen(Math.abs(x.hotel)) + '円' : ''}</p>`;
   }
-  if (own) h += line('自家用車 ' + own.dates.size + '日', yen(6000 * own.dates.size) + '円');
+  h += '<p class="sub" style="display:block">日当・時間外・運転手当・宿泊費・車両費も記入者にまとめて振り込まれる想定で計算しています。バイトの日給は対象外です。</p>';
   return h + '</div>';
 }
 
@@ -791,9 +893,12 @@ function bindTrip(t, mode){
     const cb = $('#t-cancel'); if (cb) cb.onclick = () => { tripMode = null; renderTrip(); };
     $('#t-save').onclick = () => {
       const v = { start:$('#t-start').value, end:$('#t-end').value, vehicle:$('#t-veh').value, cc:$('#t-cc').value,
-        advance:num($('#t-adv').value) ?? '', emp:codes($('#t-emp').value), pt:codes($('#t-pt').value) };
+        advance:num($('#t-adv').value) ?? '', emp:codes($('#t-emp').value), pt:codes($('#t-pt').value),
+        writer:$('#t-writer').value.trim(), carTo:$('#t-carto').value.trim() };
       if (!v.start || !v.end || v.start > v.end) return tStatus('開始日と終了日を確認してください。', true);
       if (!v.emp.length) return tStatus('社員を1人以上入力してください。', true);
+      if (v.writer && !v.emp.includes(v.writer)) return tStatus('記入者は社員の記号から入力してください。', true);
+      if (v.carTo && !v.emp.concat(v.pt).includes(v.carTo)) return tStatus('車両費の受取人はメンバーの記号から入力してください。', true);
       if (mode === 'edit') Object.assign(t, v, { sent:false });
       else {
         const id = 'T' + v.start.replace(/-/g, '') + '-' + (settings.inputter || 'A') + '-' + Math.random().toString(36).slice(2, 6);
@@ -836,6 +941,10 @@ function addLog(t){
     Object.assign(l, { start:$('#l-start').value, end:$('#l-end').value, work:Number($('#l-work').value) });
     if (!(l.work > 0)) return tStatus('作業時間を入力してください。', true);
   }
+  if (logType === '宿泊') {
+    Object.assign(l, { payer:$('#l-payer').value, cost:num($('#l-cost').value) || 0 });
+    if (l.payer !== '各自' && !l.cost) return tStatus('宿代を誰かがまとめて払った場合は、1人あたりの実費を入力してください。', true);
+  }
   if (logType === '走行') {
     Object.assign(l, { route:$('#l-route').value.trim(), km:Number($('#l-km').value), driver:$('#l-driver').value });
     if ($('#l-car')) l.car = $('#l-car').value;
@@ -850,11 +959,11 @@ function addLog(t){
 async function sendTrip(tok, t){
   $('#t-send').disabled = true; tStatus('送信しています…');
   try {
-    await replaceRows(tok, '出張', ['出張ID','入力者','開始日','終了日','使用車両','排気量','仮払金','社員','アルバイト','更新日時'], t.id,
-      [[t.id, settings.inputter, t.start, t.end, t.vehicle, t.cc === 'under' ? '1800cc未満' : '1800cc以上', t.advance, t.emp.join(','), t.pt.join(','), nowText()]]);
-    await replaceRows(tok, '勤務', ['出張ID','日付','種類','メンバー','開始','終了','移動','集合場所','半日','作業時間'], t.id,
+    await replaceRows(tok, '出張', ['出張ID','入力者','開始日','終了日','使用車両','排気量','仮払金','社員','アルバイト','更新日時','記入者','車両費受取人'], t.id,
+      [[t.id, settings.inputter, t.start, t.end, t.vehicle, t.cc === 'under' ? '1800cc未満' : '1800cc以上', t.advance, t.emp.join(','), t.pt.join(','), nowText(), writerOf(t), t.carTo || writerOf(t)]]);
+    await replaceRows(tok, '勤務', ['出張ID','日付','種類','メンバー','開始','終了','移動','集合場所','半日','作業時間','宿代支払者','宿代1人'], t.id,
       t.logs.filter(l => l.type !== '走行').map(l => [t.id, l.date, l.type, l.members.join(','), l.start || '', l.end || '',
-        l.move || '', l.place || '', l.half ? '○' : '', l.type === '時間外' ? l.work : '']));
+        l.move || '', l.place || '', l.half ? '○' : '', l.type === '時間外' ? l.work : '', l.payer || '', l.cost || '']));
     await replaceRows(tok, '走行', ['出張ID','日付','ルート','距離km','運転者','車両'], t.id,
       t.logs.filter(l => l.type === '走行').map(l => [t.id, l.date, l.route || '', l.km, l.driver, l.car || t.vehicle]));
     t.sent = true; saveTrips(); renderTrip(); tStatus('送信しました。');
